@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+uploads/
+static/gradcam_*.png
+predictions.db
+weights/model.pth
+.DS_Store
+*.egg-info/
+dist/
+build/
