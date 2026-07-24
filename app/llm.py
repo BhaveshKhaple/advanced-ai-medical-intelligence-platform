@@ -1,9 +1,8 @@
-import google.generativeai as genai
 import os
+from google import genai
+from google.genai import types
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-
-_model = genai.GenerativeModel("gemini-1.5-flash")
+_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
 REPORT_PROMPT = """
 You are an expert radiologist AI assistant. Based on the following chest X-ray analysis results,
@@ -33,7 +32,10 @@ def generate_report(diagnosis: str, confidence: float, normal_prob: float, pneum
         pneumonia_prob=pneumonia_prob,
     )
     try:
-        response = _model.generate_content(prompt)
+        response = _client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=prompt,
+        )
         return response.text.strip()
     except Exception as e:
         return f"Report generation failed: {str(e)}. Please ensure GEMINI_API_KEY is set."

@@ -2,15 +2,26 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+# Install PyTorch CPU
+RUN pip install --no-cache-dir \
+    torch torchvision \
+    --extra-index-url https://download.pytorch.org/whl/cpu
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install app dependencies
+RUN pip install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    python-multipart \
+    sqlalchemy \
+    opencv-python-headless \
+    Pillow \
+    numpy \
+    google-genai \
+    streamlit \
+    requests
 
 COPY . .
 
 EXPOSE 8000
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,8 +1,7 @@
-version: "3.9"
-
 services:
   api:
     build: .
+    image: medical-ai-api
     container_name: medical_ai_api
     ports:
       - "8000:8000"
@@ -10,22 +9,17 @@ services:
       - ./weights:/app/weights
       - ./uploads:/app/uploads
       - ./static:/app/static
-      - ./predictions.db:/app/predictions.db
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   frontend:
-    image: python:3.10-slim
+    image: medical-ai-api
     container_name: medical_ai_frontend
-    working_dir: /app
-    command: >
-      bash -c "pip install streamlit requests Pillow -q &&
-               streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0"
     ports:
       - "8501:8501"
-    volumes:
-      - ./streamlit_app.py:/app/streamlit_app.py
     environment:
       - API_URL=http://api:8000
+    command: streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0
     depends_on:
       - api
