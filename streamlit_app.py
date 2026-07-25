@@ -1,117 +1,103 @@
-import streamlit as st
-import requests
+"""
+Self-contained Streamlit app (runs the model in-process).
+Works both locally and on Streamlit Community Cloud - no separate API server needed.
+Reuses the self-contained modules and bundled model in hf_space/.
+"""
 import os
-from PIL import Image
-import io
+import sys
+import uuid
+import tempfile
 
-API_URL = os.environ.get("API_URL", "http://localhost:8000")
+# Make the self-contained modules + bundled model in hf_space/ importable
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "hf_space"))
 
-st.set_page_config(
-    page_title="AI Medical Intelligence Platform",
-    page_icon="🫁",
-    layout="wide",
-)
+import streamlit as st
+from inference import predict_image, generate_gradcam
+from report import generate_report
+from database import save_prediction, get_history
+
+st.set_page_config(page_title="AI Medical Intelligence Platform", page_icon="🫁", layout="wide")
 
 st.title("🫁 Advanced AI Medical Intelligence Platform")
-st.caption("Chest X-Ray Analysis · Pneumonia Detection · Explainable AI · LLM Report Generation")
+st.caption("Chest X-Ray Analysis · Pneumonia Detection · Explainable AI (Grad-CAM) · LLM Report Generation")
+
+with st.expander("ℹ️ About this project", expanded=False):
+    st.markdown("""
+    End-to-end deep learning system that:
+    - **Detects pneumonia** from chest X-rays using a fine-tuned **EfficientNet-B0** (97.77% val accuracy)
+    - **Explains** predictions with **Grad-CAM** heatmaps
+    - **Generates** structured radiological reports via **Google Gemini**
+    - Persists all predictions in a **SQLite** database
+
+    Built by **Bhavesh Khaple** · [GitHub Repo](https://github.com/BhaveshKhaple/advanced-ai-medical-intelligence-platform)
+
+    _Disclaimer: This is a technical demonstration, not a certified medical device. Not for clinical use._
+    """)
 
 tab1, tab2 = st.tabs(["🔬 Analyze X-Ray", "📋 History"])
+UPLOAD_DIR = tempfile.gettempdir()
 
-# ─── Tab 1: Analysis ───────────────────────────────────────────────────────────
 with tab1:
     st.subheader("Upload a Chest X-Ray Image")
-    uploaded = st.file_uploader(
-        "Supported formats: JPG, PNG, JPEG",
-        type=["jpg", "jpeg", "png"],
-    )
+    uploaded = st.file_uploader("JPG, PNG, or JPEG", type=["jpg", "jpeg", "png"])
 
     if uploaded:
         col1, col2 = st.columns(2)
-
         with col1:
             st.image(uploaded, caption="Uploaded X-Ray", use_container_width=True)
 
         if st.button("🚀 Analyze", use_container_width=True, type="primary"):
-            with st.spinner("Running deep learning inference + Grad-CAM + LLM report..."):
-                try:
-                    files = {"file": (uploaded.name, uploaded.getvalue(), uploaded.type)}
-                    response = requests.post(f"{API_URL}/predict", files=files, timeout=120)
+            with st.spinner("Running inference + Grad-CAM + report generation..."):
+                ext = os.path.splitext(uploaded.name)[-1] or ".jpg"
+                tmp_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}{ext}")
+                with open(tmp_path, "wb") as f:
+                    f.write(uploaded.getvalue())
 
-                    if response.status_code == 200:
-                        data = response.json()
+                result = predict_image(tmp_path)
+                gradcam_path = generate_gradcam(tmp_path)
+                report = generate_report(
+                    result["diagnosis"], result["confidence"],
+                    result["probabilities"]["NORMAL"],
+                    result["probabilities"]["PNEUMONIA"],
+                )
+                save_prediction(
+                    image_filename=uploaded.name,
+                    gradcam_path=gradcam_path,
+                    diagnosis=result["diagnosis"],
+                    confidence=result["confidence"],
+                    llm_report=report,
+                )
 
-                        with col2:
-                            # Grad-CAM
-                            gradcam_url = f"{API_URL}{data['gradcam_url']}"
-                            gcam_resp = requests.get(gradcam_url)
-                            if gcam_resp.status_code == 200:
-                                gcam_img = Image.open(io.BytesIO(gcam_resp.content))
-                                st.image(gcam_img, caption="Grad-CAM Heatmap", use_container_width=True)
+            with col2:
+                st.image(gradcam_path, caption="Grad-CAM Heatmap", use_container_width=True)
 
-                        # Diagnosis card
-                        diag = data["diagnosis"]
-                        conf = data["confidence"]
-                        color = "🔴" if diag == "PNEUMONIA" else "🟢"
+            diag = result["diagnosis"]
+            conf = result["confidence"]
+            color = "🔴" if diag == "PNEUMONIA" else "🟢"
+            st.markdown("---")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Diagnosis", f"{color} {diag}")
+            c2.metric("Confidence", f"{conf}%")
+            c3.metric("PNEUMONIA prob", f"{result['probabilities']['PNEUMONIA']}%")
+            st.progress(result["probabilities"]["PNEUMONIA"] / 100)
+            st.caption(f"NORMAL: {result['probabilities']['NORMAL']}%  |  "
+                       f"PNEUMONIA: {result['probabilities']['PNEUMONIA']}%")
+            st.markdown("---")
+            st.subheader("📄 AI-Generated Medical Report")
+            st.markdown(report)
 
-                        st.markdown("---")
-                        col_d1, col_d2, col_d3 = st.columns(3)
-                        with col_d1:
-                            st.metric("Diagnosis", f"{color} {diag}")
-                        with col_d2:
-                            st.metric("Confidence", f"{conf}%")
-                        with col_d3:
-                            probs = data["probabilities"]
-                            st.metric("PNEUMONIA prob", f"{probs['PNEUMONIA']}%")
-
-                        # Probabilities bar
-                        st.progress(probs["PNEUMONIA"] / 100)
-                        st.caption(f"NORMAL: {probs['NORMAL']}%  |  PNEUMONIA: {probs['PNEUMONIA']}%")
-
-                        # LLM Report
-                        st.markdown("---")
-                        st.subheader("📄 AI-Generated Medical Report")
-                        st.markdown(data["report"])
-                        st.caption(f"Prediction ID: {data['id']} | Timestamp: {data['created_at']}")
-
-                    else:
-                        st.error(f"API Error {response.status_code}: {response.text}")
-
-                except requests.exceptions.ConnectionError:
-                    st.error("Cannot connect to FastAPI backend. Make sure it is running on port 8000.")
-                except Exception as e:
-                    st.error(f"Unexpected error: {e}")
-
-# ─── Tab 2: History ────────────────────────────────────────────────────────────
 with tab2:
     st.subheader("Prediction History")
-
     if st.button("🔄 Refresh"):
         st.rerun()
-
-    try:
-        resp = requests.get(f"{API_URL}/history", timeout=10)
-        if resp.status_code == 200:
-            records = resp.json()
-            if not records:
-                st.info("No predictions yet. Upload an X-ray in the Analyze tab.")
-            else:
-                for rec in records:
-                    with st.expander(
-                        f"#{rec['id']} · {rec['diagnosis']} ({rec['confidence']}%) · {rec['image_filename']} · {rec['created_at']}"
-                    ):
-                        cols = st.columns(2)
-                        with cols[0]:
-                            if rec.get("gradcam_url"):
-                                gcam_url = f"{API_URL}{rec['gradcam_url']}"
-                                gcam_resp = requests.get(gcam_url)
-                                if gcam_resp.status_code == 200:
-                                    img = Image.open(io.BytesIO(gcam_resp.content))
-                                    st.image(img, caption="Grad-CAM", use_container_width=True)
-                        with cols[1]:
-                            report_resp = requests.get(f"{API_URL}/report/{rec['id']}")
-                            if report_resp.status_code == 200:
-                                st.markdown(report_resp.json().get("llm_report", "No report."))
-        else:
-            st.error("Failed to fetch history.")
-    except Exception as e:
-        st.error(f"Cannot connect to backend: {e}")
+    records = get_history()
+    if not records:
+        st.info("No predictions yet. Analyze an X-ray in the first tab.")
+    for r in records:
+        with st.expander(f"#{r.id} · {r.diagnosis} ({r.confidence}%) · {r.image_filename} · {r.created_at}"):
+            cols = st.columns(2)
+            with cols[0]:
+                if r.gradcam_path and os.path.exists(r.gradcam_path):
+                    st.image(r.gradcam_path, caption="Grad-CAM", use_container_width=True)
+            with cols[1]:
+                st.markdown(r.llm_report or "_No report._")
